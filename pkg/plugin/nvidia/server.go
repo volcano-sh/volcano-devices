@@ -25,6 +25,7 @@ import (
 	"path"
 	"sort"
 	"time"
+	"strings"
 
 	"github.com/NVIDIA/gpu-monitoring-tools/bindings/go/nvml"
 	v1 "k8s.io/api/core/v1"
@@ -265,6 +266,7 @@ func (m *NvidiaDevicePlugin) ListAndWatch(e *pluginapi.Empty, s pluginapi.Device
 // TODO(@hzxuzhonghu): This is called per container by kubelet, we do not handle multi containers pod case correctly.
 // Allocate which return list of devices.
 func (m *NvidiaDevicePlugin) Allocate(ctx context.Context, reqs *pluginapi.AllocateRequest) (*pluginapi.AllocateResponse, error) {
+	//peini: req.DeviceIDs seem a requirement of gpu-memory, did not use?
 	var reqCount uint
 	for _, req := range reqs.ContainerRequests {
 		reqCount += uint(len(req.DevicesIDs))
@@ -291,11 +293,12 @@ func (m *NvidiaDevicePlugin) Allocate(ctx context.Context, reqs *pluginapi.Alloc
 
 	var candidatePod *v1.Pod
 	for _, pod := range availablePods {
+		//peini: loop also in getcpuresourceofcontainer?
 		for i, c := range pod.Spec.Containers {
 			if !IsGPURequiredContainer(&c) {
 				continue
 			}
-
+            //peini: getresourceofcontainer return the resourcelimit memory?
 			if GetGPUResourceOfContainer(&pod.Spec.Containers[i]) == firstContainerReqDeviceCount {
 				klog.Infof("Got candidate Pod %s(%s), the device count is: %d", pod.UID, c.Name, firstContainerReqDeviceCount)
 				candidatePod = pod
@@ -309,23 +312,25 @@ func (m *NvidiaDevicePlugin) Allocate(ctx context.Context, reqs *pluginapi.Alloc
 	}
 
 Allocate:
-	id := GetGPUIDFromPodAnnotation(candidatePod)
-	if id < 0 {
-		klog.Warningf("Failed to get the gpu id for pod %s/%s", candidatePod.Namespace, candidatePod.Name)
-		return nil, fmt.Errorf("failed to find gpu id")
+	ids := GetGPUIDsFromPodAnnotation(candidatePod)
+	if ids == nil {
+		klog.Warningf("Failed to get the gpu ids for pod %s/%s", candidatePod.Namespace, candidatePod.Name)
+		return nil, fmt.Errorf("failed to find gpu ids")
 	}
-	_, exist := m.GetDeviceNameByIndex(uint(id))
-	if !exist {
-		klog.Warningf("Failed to find the dev for pod %s/%s because it's not able to find dev with index %d",
-			candidatePod.Namespace, candidatePod.Name, id)
-		return nil, fmt.Errorf("failed to find gpu device")
+	for _, id := range ids {
+	    _, exist := m.GetDeviceNameByIndex(uint(id))
+	    if !exist {
+	    	klog.Warningf("Failed to find the dev for pod %s/%s because it's not able to find dev with index %d",
+	    		candidatePod.Namespace, candidatePod.Name, id)
+	    	return nil, fmt.Errorf("failed to find gpu device")
+	    }
 	}
 
 	for _, req := range reqs.ContainerRequests {
 		reqGPU := len(req.DevicesIDs)
 		response := pluginapi.ContainerAllocateResponse{
 			Envs: map[string]string{
-				VisibleDevice:        fmt.Sprintf("%d", id),
+				VisibleDevice:        strings.Trim(strings.Replace(fmt.Sprint(ids), " ", ",", -1), "[]"),
 				AllocatedGPUResource: fmt.Sprintf("%d", reqGPU),
 				TotalGPUResource:     fmt.Sprintf("%d", gpuMemory),
 			},
