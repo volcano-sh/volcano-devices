@@ -266,7 +266,6 @@ func (m *NvidiaDevicePlugin) ListAndWatch(e *pluginapi.Empty, s pluginapi.Device
 // TODO(@hzxuzhonghu): This is called per container by kubelet, we do not handle multi containers pod case correctly.
 // Allocate which return list of devices.
 func (m *NvidiaDevicePlugin) Allocate(ctx context.Context, reqs *pluginapi.AllocateRequest) (*pluginapi.AllocateResponse, error) {
-	//peini: req.DeviceIDs seem a requirement of gpu-memory, did not use?
 	var reqCount uint
 	for _, req := range reqs.ContainerRequests {
 		reqCount += uint(len(req.DevicesIDs))
@@ -293,12 +292,10 @@ func (m *NvidiaDevicePlugin) Allocate(ctx context.Context, reqs *pluginapi.Alloc
 
 	var candidatePod *v1.Pod
 	for _, pod := range availablePods {
-		//peini: loop also in getcpuresourceofcontainer?
 		for i, c := range pod.Spec.Containers {
 			if !IsGPURequiredContainer(&c) {
 				continue
 			}
-            //peini: getresourceofcontainer return the resourcelimit memory?
 			if GetGPUResourceOfContainer(&pod.Spec.Containers[i]) == firstContainerReqDeviceCount {
 				klog.Infof("Got candidate Pod %s(%s), the device count is: %d", pod.UID, c.Name, firstContainerReqDeviceCount)
 				candidatePod = pod
