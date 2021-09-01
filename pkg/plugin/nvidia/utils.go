@@ -187,20 +187,25 @@ func GetPredicateTimeFromPodAnnotation(pod *v1.Pod) uint64 {
 }
 
 // GetGPUIDFromPodAnnotation returns the ID of the GPU if allocated
-func GetGPUIDFromPodAnnotation(pod *v1.Pod) int {
+func GetGPUIDsFromPodAnnotation(pod *v1.Pod) []int {
 	if len(pod.Annotations) > 0 {
 		value, found := pod.Annotations[GPUIndex]
 		if found {
-			id, err := strconv.Atoi(value)
-			if err != nil {
-				klog.Error("invalid %s=%s", GPUIndex, value)
-				return -1
-			}
-			return id
+			ids := strings.Split(value, ",")
+			idSlice := make([]int, len(ids))
+			for idx, id := range ids {
+			   j, err := strconv.Atoi(id)
+			   if err != nil {
+			   	klog.Errorf("invalid %s=%s", GPUIndex, value)
+			   	return nil
+			   }
+			   idSlice[idx] = j
+			} 
+			return idSlice
 		}
 	}
 
-	return -1
+	return nil
 }
 
 func UpdatePodAnnotations(kubeClient *kubernetes.Clientset, pod *v1.Pod) error {
