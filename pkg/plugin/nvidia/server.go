@@ -71,6 +71,7 @@ func NewNvidiaDevicePlugin(config *apis.Config) *NvidiaDevicePlugin {
 	if err != nil {
 		klog.Fatalf("cannot create kube interactor. %v", err)
 	}
+	lock.UseClient(ki.clientset)
 
 	return &NvidiaDevicePlugin{
 		ResourceManager: NewGpuDeviceManager(),
@@ -405,7 +406,6 @@ Allocate:
 		return nil, fmt.Errorf("failed to update pod annotation %v", err)
 	}
 
-	lock.UseClient(m.kubeInteractor.clientset)
 	klog.V(3).Infoln("Releasing lock: nodeName=", m.kubeInteractor.nodeName)
 	err = lock.ReleaseNodeLock(m.kubeInteractor.nodeName, deviceName)
 	if err != nil {
