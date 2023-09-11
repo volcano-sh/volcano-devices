@@ -23,19 +23,19 @@ import (
 	"net"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"time"
-
-	"k8s.io/apimachinery/pkg/util/uuid"
-	"k8s.io/klog/v2"
-	"volcano.sh/k8s-device-plugin/pkg/lock"
-	"volcano.sh/k8s-device-plugin/pkg/plugin/vgpu/config"
-	"volcano.sh/k8s-device-plugin/pkg/plugin/vgpu/util"
 
 	"github.com/NVIDIA/go-gpuallocator/gpuallocator"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
+	"k8s.io/apimachinery/pkg/util/uuid"
+	"k8s.io/klog/v2"
 	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
+	"volcano.sh/k8s-device-plugin/pkg/lock"
+	"volcano.sh/k8s-device-plugin/pkg/plugin/vgpu/config"
+	"volcano.sh/k8s-device-plugin/pkg/plugin/vgpu/util"
 )
 
 // Constants to represent the various device list strategies
@@ -59,11 +59,12 @@ const (
 // NvidiaDevicePlugin implements the Kubernetes device plugin API
 type NvidiaDevicePlugin struct {
 	ResourceManager
-	deviceCache      *DeviceCache
-	resourceName     string
-	deviceListEnvvar string
-	allocatePolicy   gpuallocator.Policy
-	socket           string
+	deviceCache        *DeviceCache
+	resourceName       string
+	deviceListEnvvar   string
+	deviceListStrategy string
+	allocatePolicy     gpuallocator.Policy
+	socket             string
 
 	server        *grpc.Server
 	cachedDevices []*Device
@@ -74,13 +75,17 @@ type NvidiaDevicePlugin struct {
 }
 
 // NewNvidiaDevicePlugin returns an initialized NvidiaDevicePlugin
-func NewNvidiaDevicePlugin(resourceName string, deviceCache *DeviceCache, allocatePolicy gpuallocator.Policy, socket string) *NvidiaDevicePlugin {
+func NewNvidiaDevicePlugin(resourceName string, deviceCache *DeviceCache, allocatePolicy gpuallocator.Policy, socket string,
+	deviceListEnvvar string, deviceListStrategy string,
+) *NvidiaDevicePlugin {
 	return &NvidiaDevicePlugin{
-		deviceCache:    deviceCache,
-		resourceName:   resourceName,
-		allocatePolicy: allocatePolicy,
-		socket:         socket,
-		migStrategy:    "none",
+		deviceCache:        deviceCache,
+		resourceName:       resourceName,
+		allocatePolicy:     allocatePolicy,
+		socket:             socket,
+		migStrategy:        "none",
+		deviceListEnvvar:   deviceListEnvvar,
+		deviceListStrategy: deviceListStrategy,
 
 		// These will be reinitialized every
 		// time the plugin server is restarted.
@@ -91,13 +96,16 @@ func NewNvidiaDevicePlugin(resourceName string, deviceCache *DeviceCache, alloca
 }
 
 // NewNvidiaDevicePlugin returns an initialized NvidiaDevicePlugin
-func NewMIGNvidiaDevicePlugin(resourceName string, resourceManager ResourceManager, deviceListEnvvar string, allocatePolicy gpuallocator.Policy, socket string) *NvidiaDevicePlugin {
+func NewMIGNvidiaDevicePlugin(resourceName string, resourceManager ResourceManager, allocatePolicy gpuallocator.Policy, socket string,
+	deviceListEnvvar string, deviceListStrategy string,
+) *NvidiaDevicePlugin {
 	return &NvidiaDevicePlugin{
-		ResourceManager:  resourceManager,
-		resourceName:     resourceName,
-		deviceListEnvvar: deviceListEnvvar,
-		allocatePolicy:   allocatePolicy,
-		socket:           socket,
+		ResourceManager:    resourceManager,
+		resourceName:       resourceName,
+		deviceListEnvvar:   deviceListEnvvar,
+		deviceListStrategy: deviceListStrategy,
+		allocatePolicy:     allocatePolicy,
+		socket:             socket,
 
 		// These will be reinitialized every
 		// time the plugin server is restarted.
@@ -261,7 +269,7 @@ func (m *NvidiaDevicePlugin) ListAndWatch(e *pluginapi.Empty, s pluginapi.Device
 			return nil
 		case d := <-m.health:
 			// FIXME: there is no way to recover from the Unhealthy state.
-			//d.Health = pluginapi.Unhealthy
+			// d.Health = pluginapi.Unhealthy
 			log.Printf("'%s' device marked unhealthy: %s", m.resourceName, d.ID)
 			_ = s.Send(&pluginapi.ListAndWatchResponse{Devices: m.apiDevices()})
 		}
@@ -335,40 +343,61 @@ func (m *NvidiaDevicePlugin) Allocate(ctx context.Context, reqs *pluginapi.Alloc
 		for i, dev := range devreq {
 			limitKey := fmt.Sprintf("CUDA_DEVICE_MEMORY_LIMIT_%v", i)
 			response.Envs[limitKey] = fmt.Sprintf("%vm", dev.Usedmem)
-			tmp := response.Envs["NVIDIA_VISIBLE_DEVICES"]
-			if i > 0 {
-				response.Envs["NVIDIA_VISIBLE_DEVICES"] = fmt.Sprintf("%v,%v", tmp, dev.UUID)
-			} else {
-				response.Envs["NVIDIA_VISIBLE_DEVICES"] = dev.UUID
-			}
+			m.addVisibleDevices(&response, dev.UUID)
 		}
 		response.Envs["CUDA_DEVICE_MEMORY_SHARED_CACHE"] = fmt.Sprintf("/tmp/vgpu/%v.cache", uuid.NewUUID())
 
 		cacheFileHostDirectory := "/tmp/vgpu/containers/" + string(current.UID) + "_" + currentCtr.Name
-		os.MkdirAll(cacheFileHostDirectory, 0777)
-		os.Chmod(cacheFileHostDirectory, 0777)
-		os.MkdirAll("/tmp/vgpulock", 0777)
-		os.Chmod("/tmp/vgpulock", 0777)
+		os.MkdirAll(cacheFileHostDirectory, 0o777)
+		os.Chmod(cacheFileHostDirectory, 0o777)
+		os.MkdirAll("/tmp/vgpulock", 0o777)
+		os.Chmod("/tmp/vgpulock", 0o777)
 		hostHookPath := os.Getenv("HOOK_PATH")
 		response.Mounts = append(response.Mounts,
-			&pluginapi.Mount{ContainerPath: "/usr/local/vgpu/libvgpu.so",
-				HostPath: hostHookPath + "/libvgpu.so",
-				ReadOnly: true},
-			&pluginapi.Mount{ContainerPath: "/etc/ld.so.preload",
-				HostPath: hostHookPath + "/ld.so.preload",
-				ReadOnly: true},
-			&pluginapi.Mount{ContainerPath: "/tmp/vgpu",
-				HostPath: cacheFileHostDirectory,
-				ReadOnly: false},
-			&pluginapi.Mount{ContainerPath: "/tmp/vgpulock",
-				HostPath: "/tmp/vgpulock",
-				ReadOnly: false},
+			&pluginapi.Mount{
+				ContainerPath: "/usr/local/vgpu/libvgpu.so",
+				HostPath:      hostHookPath + "/libvgpu.so",
+				ReadOnly:      true,
+			},
+			&pluginapi.Mount{
+				ContainerPath: "/etc/ld.so.preload",
+				HostPath:      hostHookPath + "/ld.so.preload",
+				ReadOnly:      true,
+			},
+			&pluginapi.Mount{
+				ContainerPath: "/tmp/vgpu",
+				HostPath:      cacheFileHostDirectory,
+				ReadOnly:      false,
+			},
+			&pluginapi.Mount{
+				ContainerPath: "/tmp/vgpulock",
+				HostPath:      "/tmp/vgpulock",
+				ReadOnly:      false,
+			},
 		)
 		responses.ContainerResponses = append(responses.ContainerResponses, &response)
 	}
 	klog.Infoln("Allocate Response", responses.ContainerResponses)
 	util.PodAllocationTrySuccess(nodename, current)
 	return &responses, nil
+}
+
+func (m *NvidiaDevicePlugin) addVisibleDevices(response *pluginapi.ContainerAllocateResponse, deviceID string) {
+	switch m.deviceListStrategy {
+	case DeviceListStrategyVolumeMounts:
+		response.Envs[m.deviceListEnvvar] = deviceListAsVolumeMountsContainerPathRoot
+		response.Mounts = append(response.Mounts, &pluginapi.Mount{
+			HostPath:      deviceListAsVolumeMountsHostPath,
+			ContainerPath: filepath.Join(deviceListAsVolumeMountsContainerPathRoot, deviceID),
+		})
+	case DeviceListStrategyEnvvar:
+		// append to existing value
+		if exists := response.Envs[m.deviceListEnvvar]; len(exists) == 0 {
+			response.Envs[m.deviceListEnvvar] = deviceID
+		} else {
+			response.Envs[m.deviceListEnvvar] = fmt.Sprintf("%s,%s", exists, deviceID)
+		}
+	}
 }
 
 // PreStartContainer is unimplemented for this plugin
@@ -384,7 +413,6 @@ func (m *NvidiaDevicePlugin) dial(unixSocketPath string, timeout time.Duration) 
 			return net.DialTimeout("unix", addr, timeout)
 		}),
 	)
-
 	if err != nil {
 		return nil, err
 	}

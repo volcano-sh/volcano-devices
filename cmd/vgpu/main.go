@@ -66,6 +66,7 @@ func init() {
 	rootCmd.Flags().UintVar(&config.DeviceSplitCount, "device-split-count", 2, "the number for NVIDIA device split")
 	rootCmd.Flags().Float64Var(&config.DeviceCoresScaling, "device-cores-scaling", 1.0, "the ratio for NVIDIA device cores scaling")
 	rootCmd.Flags().StringVar(&config.NodeName, "node-name", viper.GetString("node-name"), "node name")
+	rootCmd.Flags().StringVar(&config.DeviceListStrategy, "device-list-strategy", "envvar", "the strategy for passing the device list to the container runtime:\n\t\t[envvar | volume-mounts | cdi-annotations]")
 
 	rootCmd.PersistentFlags().AddGoFlagSet(util.GlobalFlagSet())
 	rootCmd.AddCommand(config.VersionCmd)
@@ -128,7 +129,7 @@ restart:
 
 		// Start the gRPC server for plugin p and connect it with the kubelet.
 		if err := p.Start(); err != nil {
-			//klog.SetOutput(os.Stderr)
+			// klog.SetOutput(os.Stderr)
 			klog.Info("Could not contact Kubelet, retrying. Did you enable the device plugin feature gate?")
 			klog.Info("You can check the prerequisites at: https://github.com/NVIDIA/k8s-device-plugin#prerequisites")
 			klog.Info("You can learn how to set the runtime at: https://github.com/NVIDIA/k8s-device-plugin#quick-start")

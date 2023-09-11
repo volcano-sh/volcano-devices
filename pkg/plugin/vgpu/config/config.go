@@ -22,4 +22,5 @@ var (
 	NodeName           string
 	RuntimeSocketFlag  string
 	DisableCoreLimit   bool
+	DeviceListStrategy string
 )

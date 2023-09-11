@@ -23,6 +23,7 @@ import (
 	"github.com/NVIDIA/go-gpuallocator/gpuallocator"
 	"github.com/NVIDIA/gpu-monitoring-tools/bindings/go/nvml"
 	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
+	"volcano.sh/k8s-device-plugin/pkg/plugin/vgpu/config"
 	"volcano.sh/k8s-device-plugin/pkg/plugin/vgpu/util"
 )
 
@@ -55,9 +56,11 @@ func NewMigStrategy(strategy string) (MigStrategy, error) {
 	return nil, fmt.Errorf("unknown strategy: %v", strategy)
 }
 
-type migStrategyNone struct{}
-type migStrategySingle struct{}
-type migStrategyMixed struct{}
+type (
+	migStrategyNone   struct{}
+	migStrategySingle struct{}
+	migStrategyMixed  struct{}
+)
 
 // migStrategyNone
 func (s *migStrategyNone) GetPlugins(cache *DeviceCache) []*NvidiaDevicePlugin {
@@ -67,7 +70,10 @@ func (s *migStrategyNone) GetPlugins(cache *DeviceCache) []*NvidiaDevicePlugin {
 			util.ResourceName,
 			cache,
 			gpuallocator.NewBestEffortPolicy(),
-			pluginapi.DevicePluginPath+"nvidia-gpu.sock"),
+			pluginapi.DevicePluginPath+"nvidia-gpu.sock",
+			"NVIDIA_VISIBLE_DEVICES",
+			config.DeviceListStrategy,
+		),
 	}
 }
 
@@ -137,16 +143,21 @@ func (s *migStrategyMixed) GetPlugins(cache *DeviceCache) []*NvidiaDevicePlugin 
 			util.ResourceName,
 			cache,
 			gpuallocator.NewBestEffortPolicy(),
-			pluginapi.DevicePluginPath+"nvidia-gpu.sock"),
+			pluginapi.DevicePluginPath+"nvidia-gpu.sock",
+			"NVIDIA_VISIBLE_DEVICES",
+			config.DeviceListStrategy,
+		),
 	}
 
 	for resource := range resources {
 		plugin := NewMIGNvidiaDevicePlugin(
 			"nvidia.com/"+resource,
 			NewMigDeviceManager(s, resource),
-			"NVIDIA_VISIBLE_DEVICES",
 			gpuallocator.Policy(nil),
-			pluginapi.DevicePluginPath+"nvidia-"+resource+".sock")
+			pluginapi.DevicePluginPath+"nvidia-"+resource+".sock",
+			"NVIDIA_VISIBLE_DEVICES",
+			config.DeviceListStrategy,
+		)
 		plugins = append(plugins, plugin)
 	}
 
