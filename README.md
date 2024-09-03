@@ -24,7 +24,7 @@ The Volcano device plugin for Kubernetes is a Daemonset that allows you to autom
 - Keep track of the health of your GPUs
 - Run GPU enabled containers in your Kubernetes cluster.
 
-This repository contains Volcano's official implementation of the [Kubernetes device plugin](https://github.com/kubernetes/community/blob/master/contributors/design-proposals/resource-management/device-plugin.md).
+This repository contains Volcano's official implementation of the [Kubernetes device plugin](https://github.com/kubernetes/design-proposals-archive/blob/main/resource-management/device-plugin.md).
 
 ## Prerequisites
 
