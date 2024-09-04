@@ -18,7 +18,9 @@ package nvidia
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"k8s.io/apimachinery/pkg/types"
 	"math"
 	"strconv"
 	"strings"
@@ -188,6 +190,14 @@ func GetGPUIDsFromPodAnnotation(pod *v1.Pod) []int {
 	return nil
 }
 
+type objectForAddAnnotations struct {
+	Metadata objectMetaForPatch `json:"metadata"`
+}
+
+type objectMetaForPatch struct {
+	Annotations map[string]string `json:"annotations,omitempty" protobuf:"bytes,12,rep,name=annotations"`
+}
+
 func UpdatePodAnnotations(kubeClient *kubernetes.Clientset, pod *v1.Pod) error {
 	pod, err := kubeClient.CoreV1().Pods(pod.Namespace).Get(context.TODO(), pod.Name, metav1.GetOptions{})
 	if err != nil {
@@ -196,10 +206,19 @@ func UpdatePodAnnotations(kubeClient *kubernetes.Clientset, pod *v1.Pod) error {
 	if len(pod.Annotations) == 0 {
 		pod.Annotations = map[string]string{}
 	}
-
 	pod.Annotations[GPUAssigned] = "true"
 
-	// TODO(@hzxuzhonghu): use patch instead
-	_, err = kubeClient.CoreV1().Pods(pod.Namespace).Update(context.TODO(), pod, metav1.UpdateOptions{})
+	addAnnotationsPath := objectForAddAnnotations{
+		Metadata: objectMetaForPatch{
+			Annotations: pod.Annotations,
+		},
+	}
+
+	patchBytes, err := json.Marshal(&addAnnotationsPath)
+	if err != nil {
+		return err
+	}
+
+	_, err = kubeClient.CoreV1().Pods(pod.Namespace).Patch(context.TODO(), pod.Name, types.MergePatchType, patchBytes, metav1.PatchOptions{})
 	return err
 }
